@@ -23,7 +23,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
     Parameters
     ----------
     n_latent_dimensions: int, default=2
-        Number of ideological embedding dimensions
+        Number of ideological embedding dimensions.
 
     random_state : int, RandomState instance or None, default=None
         A pseudo random number generator used for the initialization
@@ -36,8 +36,8 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
         Sklearn valid input check.
 
     engine: str, default='auto'
-        The user can specify the ideological embedding
-        computation library to use.
+        Ideological embedding computation library to use.
+        If engine is 'auto' the 'prince' engine is used.
 
     in_degree_threshold: int or None, default=Non
         Nodes that are followed by less than this number
@@ -48,19 +48,77 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
         (in the original graph) are removed the network.
 
     force_bipartite: bool, default=True
+        Remove ....
 
     standardize_mean: bool, default=True
+        If True, standardize ideological embeddings (source and target)
+        by removing the mean and scaling to unit variance.
 
     standardize_std: bool, default=False
+        If True and standardize_mean is True, scale ideological embeddings
+        (source and target) to unit variance (or equivalently,
+        unit standard deviation).
 
     force_full_rank: bool, default=False
+
+
+    Attributes
+    ----------
+    candidate_explained_inertia_:
+
+    candidate_total_inertia_:
+
+    column_ids_: ndarray of shape (n_unique_sources_entities,)
+        Ids of source entities.
+
+    eigenvalues_:
+
+    employed_n_latent_dimensions: int
+        Number of latent dimension used in embedding.
+
+    explained_inertia_:
+
+    ideological_embedding_class: str
+        Name of the class used ofr CA analysis
+
+    ideological_embedding_model: python class
+        <class 'prince.ca.CA'>
+
+    ideological_embedding_module: python module
+        <module 'prince' from '/path/to/module'>
+
+    ideological_embedding_source_latent_dimensions_:
+        Coordinates in latent space of source entities.
+
+    ideological_embedding_target_latent_dimensions_:
+        Coordinates in latent space of target entities.
+
+    is_bipartite_: bool
+        True if network is bipartite, else False.
+
+    row_ids_:  ndarray of shape (n_unique_target_entities,)
+        Ids of target entities.
+
+    score:
+
+    source_entity_no_: int
+        Number of unique source entities
+
+    target_entity_no_:
+        Number of unique target entities
+
+    total_inertia_:
 
     """
 
     ideological_embedding_class = 'CA'
 
     # by default use the 'prince' module to compute the ideological embedding
-    default_ideological_embedding_engines = ['sklearn', 'auto', 'fbpca']
+    default_ideological_embedding_engines = [
+        'auto',
+        'sklearn',
+        'fbpca'
+    ]
 
     def __init__(
         self,
@@ -101,10 +159,12 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
             Engine name
         """
 
-        module_name = 'prince'
-
         if self.engine not in self.default_ideological_embedding_engines:
-            module_name = self.engine
+            de = self.default_ideological_embedding_engines
+            raise ValueError(
+                f"Unvalid engine name '{self.engine}'. Must be one of {de}.")
+
+        module_name = 'prince' if self.engine == 'auto' else self.engine
 
         try:
             self.ideological_embedding_module = import_module(module_name)
@@ -113,6 +173,37 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
             Please install it and make it visible to use it.""")
 
         print(f"Using Ideological Embedding engine '{module_name}'.")
+
+    def pre_full_rank(self, X):
+
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError(
+                'To force full rank X needs to be a pandas dataframe...')
+
+        if 'source' not in X.columns:
+            raise ValueError(
+                "To force full rank X needs to have a 'source' column...")
+
+        if 'target' not in X.columns:
+            raise ValueError(
+                "To force full rank X needs to have a 'target' column...")
+
+        # check if X is full rank
+        follow_pattern_df = X \
+            .sort_values('target') \
+            .groupby('source') \
+            .target.agg(' '.join)
+        unique_follow_pattern = follow_pattern_df.drop_duplicates(
+            inplace=False)
+        unique_follow_pattern_idx = unique_follow_pattern.index.tolist()
+        is_original_full_rank = False
+        if len(X.index.tolist()) == len(unique_follow_pattern_idx):
+            is_original_full_rank = True
+        else:
+            X = X[X['source'].isin(unique_follow_pattern_idx)]
+        follow_pattern_df = follow_pattern_df \
+            .to_frame() \
+            .reset_index()
 
     def fit(self, X):
         """
@@ -127,35 +218,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
         X = X.copy()
 
         if self.force_full_rank:
-            if not isinstance(X, pd.DataFrame):
-                raise ValueError(
-                    'To force full rank X needs to be a pandas dataframe...')
-
-            if 'source' not in X.columns:
-                raise ValueError(
-                    "To force full rank X needs to have a 'source' column...")
-
-            if 'target' not in X.columns:
-                raise ValueError(
-                    "To force full rank X needs to have a 'target' column...")
-
-            # check if X is full rank
-            follow_pattern_df = X \
-                .sort_values('target') \
-                .groupby('source') \
-                .target.agg(' '.join)
-            unique_follow_pattern = follow_pattern_df.drop_duplicates(
-                inplace=False)
-            unique_follow_pattern_idx = unique_follow_pattern.index.tolist()
-            is_original_full_rank = False
-            if len(X.index.tolist()) == len(unique_follow_pattern_idx):
-                is_original_full_rank = True
-            else:
-                # original_X = X.copy()
-                X = X[X['source'].isin(unique_follow_pattern_idx)]
-            follow_pattern_df = follow_pattern_df \
-                .to_frame() \
-                .reset_index()
+            X, follow_pattern_df = self.pre_full_rank(X)
 
         if isinstance(X, pd.DataFrame):
             X = self.__check_input_and_convert_to_matrix(X)
@@ -173,9 +236,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
             self.target_entity_no_ = X.shape[1]
 
         # and generate row and column IDs if needed
-        try:
-            len(self.column_ids_)
-        except AttributeError:
+        if not hasattr(self, "column_ids_"):
             self.column_ids_ = np.empty(self.target_entity_no_, dtype=object)
             for indx in range(self.target_entity_no_):
                 self.column_ids_[indx] = 'target_' + str(indx)
@@ -196,10 +257,11 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
                 self.employed_n_latent_dimensions = self.n_latent_dimensions
 
         # compute Ideological Embedding of a (sparse) matrix
-        print('Computing Ideological Embedding...')
+        print('Computing Ideological Embedding... ' , end='')
         ideological_embedding_class = getattr(
             self.ideological_embedding_module,
             self.ideological_embedding_class)
+
         self.ideological_embedding_model = None
         if self.engine in self.default_ideological_embedding_engines:
             self.ideological_embedding_model = ideological_embedding_class(
@@ -215,6 +277,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
                 n_components=self.employed_n_latent_dimensions)
             self.ideological_embedding_model.fit(X)
 
+        print("done.")
         # finally construct the results
         if self.engine in self.default_ideological_embedding_engines:
             self.ideological_embedding_source_latent_dimensions_ = \
@@ -231,9 +294,11 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
                 self.ideological_embedding_model.column_coordinates()
 
         if self.standardize_mean:
+
             std_scaler = StandardScaler(
                 with_mean=self.standardize_mean,
                 with_std=self.standardize_std)
+
             std_scaler.fit(
                 pd.concat([
                     self.ideological_embedding_source_latent_dimensions_,
@@ -244,12 +309,14 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
             target_scaled_dim = pd.DataFrame(
                 columns=self.ideological_embedding_target_latent_dimensions_.columns,
                 data=std_scaler.transform(self.ideological_embedding_target_latent_dimensions_))
+
             self.ideological_embedding_target_latent_dimensions_ = \
                 target_scaled_dim
 
             source_scaled_dim = pd.DataFrame(
                 columns=self.ideological_embedding_source_latent_dimensions_.columns,
                 data=std_scaler.transform(self.ideological_embedding_source_latent_dimensions_))
+
             self.ideological_embedding_source_latent_dimensions_ = source_scaled_dim
 
         column_names = self.ideological_embedding_source_latent_dimensions_.columns
@@ -324,13 +391,13 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
                 'standardize_mean': self.standardize_mean,
                 'standardize_std': self.standardize_std}
 
-    def set_params(self, **parameters):
-        for parameter, value in parameters.items():
-            setattr(self, parameter, value)
-        return self
+    # def set_params(self, **parameters):
+    #     for parameter, value in parameters.items():
+    #         setattr(self, parameter, value)
+    #     return self
 
-    def score(self, X, y):
-        return 1
+    # def score(self, X, y):
+    #     return 1
 
     def compute_latent_embedding_distance(
         self,
@@ -416,11 +483,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
 
         return (ideological_dim_dist)
 
-    def load_benchmark_ideological_dimensions_from_file(
-        self,
-        path,
-        header_names=None
-    ):
+    def load_benchmark_ideological_dimensions_from_file(self, path, header_names=None):
 
         # check that benchmark ideological dimensions file is provided
         if path is None:
@@ -468,11 +531,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
 
         return (input_df)
 
-    def load_input_from_file(
-        self,
-        path_to_network_data,
-        header_names=None
-    ):
+    def load_input_from_file(self, path_to_network_data, header_names=None):
 
         # check that a network file is provided
         if path_to_network_data is None:
@@ -537,7 +596,7 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
                             header_names['source']: 'source',
                             header_names['target']: 'target'})
 
-        print('Load network ended.')
+        print('Network loaded.')
 
         return (input_df)
 
@@ -555,7 +614,8 @@ class IdeologicalEmbedding(BaseEstimator, TransformerMixin):
             if self.engine in self.default_ideological_embedding_engines:
                 return (self.candidate_total_inertia_)
 
-            self.candidate_total_inertia_ = self.ideological_embedding_model.get_total_inertia()
+            self.candidate_total_inertia_ = \
+                self.ideological_embedding_model.get_total_inertia()
             return (self.candidate_total_inertia_)
         except AttributeError:
             raise AttributeError('Ideological Embedding model not yet fitted.')
